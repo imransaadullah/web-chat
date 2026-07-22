@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>web-chat demo host app</title>
+  <style>
+    body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 60px auto; padding: 0 20px; color: #222; }
+    h1 { font-size: 20px; }
+    .toolbar { display: flex; gap: 10px; margin: 16px 0; flex-wrap: wrap; }
+    select, button { padding: 8px 12px; border-radius: 8px; border: 1px solid #ccc; font-size: 13px; }
+    button.primary { background: #5850ec; color: white; border: none; cursor: pointer; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; }
+    td, th { border-bottom: 1px solid #eee; padding: 8px; text-align: left; font-size: 13px; }
+    code { background: #f2f2f5; padding: 2px 6px; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Invoices — demo host app</h1>
+  <p>This page stands in for "your product." It has a filtered data view. Set your public key below, then use
+    the filters — every change calls <code>WebChat.setContext(...)</code>. Hit "Share this view in chat" to see
+    the context land as a card in the widget.</p>
+
+  <p>
+    Public key: <input id="pk" placeholder="pk_..." style="width:280px;padding:6px;" />
+    <button id="save-pk">Use key</button>
+  </p>
+
+  <div class="toolbar">
+    <select id="status-filter">
+      <option value="all">All statuses</option>
+      <option value="overdue" selected>Overdue</option>
+      <option value="paid">Paid</option>
+    </select>
+    <select id="range-filter">
+      <option value="q1">Q1 2026</option>
+      <option value="q2" selected>Q2 2026</option>
+    </select>
+    <button class="primary" id="share-btn">Share this view in chat</button>
+  </div>
+
+  <table id="table">
+    <thead><tr><th>Invoice</th><th>Customer</th><th>Amount</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td>INV-1042</td><td>Acme Co</td><td>$1,200</td><td>Overdue</td></tr>
+      <tr><td>INV-1058</td><td>Globex</td><td>$860</td><td>Overdue</td></tr>
+      <tr><td>INV-1063</td><td>Initech</td><td>$2,400</td><td>Overdue</td></tr>
+    </tbody>
+  </table>
+
+  <script src="/dist/web-chat.js"></script>
+  <script>
+    let inited = false;
+
+    function currentContext() {
+      const status = document.getElementById('status-filter').value;
+      const range = document.getElementById('range-filter').value;
+      return {
+        kind: 'view',
+        title: `Invoices — ${status === 'all' ? 'All' : status[0].toUpperCase() + status.slice(1)}, ${range.toUpperCase()}`,
+        summary: `Filtered invoice list a visitor is currently looking at.`,
+        url: `${location.origin}${location.pathname}?status=${status}&range=${range}`,
+        data: { status, range },
+        snapshot: [
+          { label: 'Status filter', value: status },
+          { label: 'Date range', value: range },
+          { label: 'Rows visible', value: document.querySelectorAll('#table tbody tr').length + '' },
+        ],
+      };
+    }
+
+    function initWidget(publicKey) {
+      window.WebChat.init({
+        appId: publicKey,
+        serverUrl: 'http://localhost:4000',
+        visitor: { id: 'demo-visitor-1', name: 'Demo Visitor', email: 'demo@example.com' },
+        accentColor: '#5850ec',
+      });
+      window.WebChat.open();
+      window.WebChat.setContext(currentContext());
+      inited = true;
+    }
+
+    document.getElementById('save-pk').addEventListener('click', () => {
+      const pk = document.getElementById('pk').value.trim();
+      if (!pk) return;
+      localStorage.setItem('wc-demo-pk', pk);
+      location.reload();
+    });
+
+    document.getElementById('share-btn').addEventListener('click', () => {
+      if (!inited) return alert('Set your public key first.');
+      window.WebChat.shareContext(currentContext());
+    });
+
+    ['status-filter', 'range-filter'].forEach((id) => {
+      document.getElementById(id).addEventListener('change', () => {
+        if (inited) window.WebChat.setContext(currentContext());
+      });
+    });
+
+    const savedPk = localStorage.getItem('wc-demo-pk');
+    if (savedPk) {
+      document.getElementById('pk').value = savedPk;
+      initWidget(savedPk);
+    }
+  </script>
+</body>
+</html>

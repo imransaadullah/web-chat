@@ -1,0 +1,23 @@
+{
+  "name": "@web-chat/widget-sdk",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/web-chat.js",
+  "module": "./dist/web-chat.esm.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "dev": "tsup --watch",
+    "build": "tsup",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "demo": "node demo/serve.mjs"
+  },
+  "dependencies": {
+    "@web-chat/shared": "*",
+    "socket.io-client": "^4.8.0"
+  },
+  "devDependencies": {
+    "tsup": "^8.3.0",
+    "typescript": "^5.6.3"
+  }
+}
