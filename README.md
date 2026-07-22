@@ -125,3 +125,4 @@ package-registry access, so `npm install` / build / typecheck could not be
 run end-to-end here — the review was manual instead. Run `npm run typecheck`
 after your first `npm install` and treat anything it flags as the first
 thing to fix.
+# web-chat
