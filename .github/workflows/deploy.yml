@@ -3,9 +3,11 @@ name: Deploy
 # Autonomous CD, per TRUSTMAIL_SERVICE_GUIDE.md §2.1: this pipeline ships
 # straight to the VPS on every push to main. TrustMail's own repo/installer
 # never clones, builds, or restarts this service — it only generated our
-# .env once and enabled systemd/web-chat.service (see that file). Nothing
-# in this workflow runs until VPS_HOST/VPS_USER/VPS_SSH_KEY are set as repo
-# secrets — until then it's inert.
+# .env once and enabled systemd/web-chat.service (see that file — its
+# WorkingDirectory/EnvironmentFile paths must be substituted to match
+# VPS_DEPLOY_DIR below, since a systemd unit can't read a CI variable).
+# Nothing in this workflow runs until VPS_HOST/VPS_USER/VPS_SSH_KEY are set
+# as repo secrets — until then it's inert.
 
 on:
   push:
@@ -15,6 +17,11 @@ on:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    env:
+      # Repo Variable (Settings -> Actions -> Variables), not a secret —
+      # the path itself isn't sensitive. Falls back to /opt/web-chat,
+      # matching systemd/web-chat.service's default, if unset.
+      DEPLOY_DIR: ${{ vars.VPS_DEPLOY_DIR || '/opt/web-chat' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -46,7 +53,7 @@ jobs:
         # packages (widget-sdk, dashboard) is trivial; correctness here
         # matters more than minimalism.
         run: |
-          ssh -o StrictHostKeyChecking=accept-new "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "mkdir -p /opt/web-chat"
+          ssh -o StrictHostKeyChecking=accept-new "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" "mkdir -p $DEPLOY_DIR"
           rsync -az --delete \
             --exclude='.git' \
             --exclude='node_modules' \
@@ -54,7 +61,7 @@ jobs:
             --exclude='packages/server/uploads' \
             --exclude='packages/server/prisma/dev.db*' \
             -e "ssh -o StrictHostKeyChecking=accept-new" \
-            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:/opt/web-chat/"
+            ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:$DEPLOY_DIR/"
 
       - name: Install, migrate, restart
         uses: appleboy/ssh-action@v1
@@ -62,15 +69,19 @@ jobs:
           host: ${{ secrets.VPS_HOST }}
           username: ${{ secrets.VPS_USER }}
           key: ${{ secrets.VPS_SSH_KEY }}
+          # appleboy/ssh-action templates `script:` with the workflow's own
+          # expression context before sending it over SSH, so ${{ env.DEPLOY_DIR }}
+          # resolves here same as in the rsync step above — it's not read
+          # from the remote shell's environment.
           script: |
             set -e
-            cd /opt/web-chat
+            cd ${{ env.DEPLOY_DIR }}
             # Not --omit=dev: packages/server needs the `prisma` CLI (a
             # devDependency) at deploy time for `prisma migrate deploy`
             # below — omitting dev deps would silently break migrations.
             npm ci
             cd packages/server
             npx prisma migrate deploy
-            cd /opt/web-chat
+            cd ${{ env.DEPLOY_DIR }}
             echo "${{ github.sha }}" > .deploy_hash
             systemctl restart web-chat

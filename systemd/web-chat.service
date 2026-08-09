@@ -4,8 +4,14 @@ After=network.target postgresql.service redis.service
 
 [Service]
 Type=simple
-WorkingDirectory=/opt/web-chat/packages/server
-EnvironmentFile=/opt/web-chat/.env
+# __DEPLOY_DIR__ is a placeholder, not a real path — a systemd unit can't
+# read a CI variable, so this must be substituted by whoever installs the
+# service (trustmail's installer, or by hand) to match VPS_DEPLOY_DIR from
+# deploy.yml. Defaults to /opt/web-chat if VPS_DEPLOY_DIR is left unset —
+# use that literal value here too in that case. e.g.:
+#   sed "s#__DEPLOY_DIR__#/opt/web-chat#g" systemd/web-chat.service > /etc/systemd/system/web-chat.service
+WorkingDirectory=__DEPLOY_DIR__/packages/server
+EnvironmentFile=__DEPLOY_DIR__/.env
 ExecStart=/usr/bin/node dist/index.js
 Restart=always
 RestartSec=5

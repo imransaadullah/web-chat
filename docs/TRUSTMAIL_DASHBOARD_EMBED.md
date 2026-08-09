@@ -21,6 +21,41 @@ so running one doesn't clobber the other.
 
 ## Consuming it from trustmail
 
+> **This is a GitHub Packages install, not a public npm package.**
+> `@imransaadullah/web-chat-dashboard` is published to GitHub's own npm
+> registry, scoped to this repo — a plain `npm install` will 404 until
+> trustmail's repo is configured to point that scope at GitHub Packages
+> with a read token. See "Installing" immediately below before the code
+> example after it will actually resolve.
+
+### Installing
+
+Add a `.npmrc` scoping `@imransaadullah` to GitHub Packages, plus a
+read-only [personal access token](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry#authenticating-to-github-packages)
+(classic PAT with `read:packages`, from a bot/service account, not a
+personal one) with access to this repo:
+
+```
+# trustmail-repo/.npmrc
+@imransaadullah:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}
+```
+
+Then a normal dependency. For "always up to date" (every auto-published
+build off `main` — see "Releasing" below), install `@latest` explicitly
+and re-run `npm install` on trustmail's own deploy; there's no dist-tag
+npm will silently track for you otherwise:
+
+```
+npm install @imransaadullah/web-chat-dashboard@latest
+```
+
+Pinning to a caret range (`^0.1.0`) also works — every auto-published patch
+satisfies it — but only picks up new patches when trustmail runs
+`npm update`, not automatically.
+
+### Usage
+
 ```tsx
 import { Dashboard } from "@imransaadullah/web-chat-dashboard";
 import "@imransaadullah/web-chat-dashboard/style.css";
@@ -93,7 +128,9 @@ Either way, `WEBCHAT_MASTER_KEY` is still only ever sent server-to-server
 Published as `@imransaadullah/web-chat-dashboard` on GitHub Packages'
 npm registry (`https://npm.pkg.github.com`) — scoped to `@imransaadullah`
 because GitHub Packages requires a scoped package's scope to match the
-repository owner exactly, not an arbitrary org name like `@web-chat`.
+repository owner exactly, not an arbitrary org name like `@web-chat`. (See
+"Installing" above for how trustmail's repo consumes it — this section is
+the CI/publishing side, on web-chat's end.)
 
 Note the internal workspace package is still named `@web-chat/shared` etc.
 internally — only the dashboard's *published* artifact needed renaming,
@@ -119,27 +156,3 @@ committed back to the repo — only the ephemeral CI checkout's
 intentional breaking/feature release. `npm publish` moves the `latest`
 dist-tag to whatever it just published, so `@latest` always resolves to
 the newest build from `main`.
-
-**Installing from trustmail's repo** — add a `.npmrc` scoping
-`@imransaadullah` to GitHub Packages, plus a read-only
-[personal access token](https://docs.github.com/en/packages/working-with-a-github-packages-registry/working-with-the-npm-registry#authenticating-to-github-packages)
-(classic PAT with `read:packages`, from a bot/service account, not a
-personal one) with access to this repo:
-
-```
-# trustmail-repo/.npmrc
-@imransaadullah:registry=https://npm.pkg.github.com
-//npm.pkg.github.com/:_authToken=${GITHUB_PACKAGES_TOKEN}
-```
-
-Then a normal dependency. For "always up to date," install `@latest`
-explicitly and re-run `npm install` on trustmail's own deploy (there's no
-dist-tag npm will silently track for you otherwise):
-
-```
-npm install @imransaadullah/web-chat-dashboard@latest
-```
-
-Pinning to a caret range (`^0.1.0`) also works — every auto-published patch
-satisfies it — but only picks up new patches when trustmail runs
-`npm update`, not automatically.
