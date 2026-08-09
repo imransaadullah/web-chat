@@ -10,11 +10,12 @@
     "packages/dashboard"
   ],
   "scripts": {
+    "postinstall": "npm run db:generate -w packages/server",
     "build": "npm run build -w packages/shared && npm run build -w packages/server && npm run build -w packages/widget-sdk && npm run build -w packages/dashboard",
     "dev:server": "npm run dev -w packages/server",
     "dev:dashboard": "npm run dev -w packages/dashboard",
     "dev:widget": "npm run dev -w packages/widget-sdk",
-    "typecheck": "npm run typecheck -w packages/shared && npm run typecheck -w packages/server && npm run typecheck -w packages/widget-sdk && npm run typecheck -w packages/dashboard",
+    "typecheck": "npm run build -w packages/shared && npm run typecheck -w packages/server && npm run typecheck -w packages/widget-sdk && npm run typecheck -w packages/dashboard",
     "db:migrate": "npm run db:migrate -w packages/server",
     "db:seed": "npm run db:seed -w packages/server"
   },
