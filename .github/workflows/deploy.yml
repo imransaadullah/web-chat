@@ -18,10 +18,10 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      # Repo Variable (Settings -> Actions -> Variables), not a secret —
-      # the path itself isn't sensitive. Falls back to /opt/web-chat,
-      # matching systemd/web-chat.service's default, if unset.
-      DEPLOY_DIR: ${{ vars.VPS_DEPLOY_DIR || '/opt/web-chat' }}
+      # Repo secret (Settings -> Secrets and variables -> Actions ->
+      # Secrets), alongside VPS_HOST/VPS_USER/VPS_SSH_KEY. Falls back to
+      # /opt/web-chat, matching systemd/web-chat.service's default, if unset.
+      DEPLOY_DIR: ${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }}
     steps:
       - uses: actions/checkout@v4
 
