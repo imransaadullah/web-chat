@@ -1,5 +1,6 @@
 node_modules/
 dist/
+dist-lib/
 build/
 .env
 .env.local
@@ -7,4 +8,5 @@ build/
 .DS_Store
 packages/server/prisma/dev.db
 packages/server/prisma/dev.db-journal
+packages/server/uploads/
 _to_delete/

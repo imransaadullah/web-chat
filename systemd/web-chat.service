@@ -1,0 +1,16 @@
+[Unit]
+Description=web-chat server
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/web-chat/packages/server
+EnvironmentFile=/opt/web-chat/.env
+ExecStart=/usr/bin/node dist/index.js
+Restart=always
+RestartSec=5
+User=web-chat
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

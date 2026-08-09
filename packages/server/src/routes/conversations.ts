@@ -1,6 +1,6 @@
 import type { FastifyInstance } from "fastify";
 import { prisma } from "../db.js";
-import { requirePublicKey, requireSecretKey, requireAnyKey } from "../auth.js";
+import { requirePublicKey, requireSecretKey, requireAnyKey, resolveIdentity } from "../auth.js";
 import {
   toContextDTO,
   toConversationDTO,
@@ -8,9 +8,12 @@ import {
 } from "../mappers.js";
 import { emitConversation, emitConversationUpdate, emitMessage } from "../realtime.js";
 import { dispatchWebhook } from "../webhooks.js";
+import { serializePageSnapshot } from "../pageSnapshot.js";
+import { resolveVerifiedUser } from "../routing.js";
+import type { PageSnapshot } from "@web-chat/shared";
 
 interface CreateConversationBody {
-  visitor: { id: string; name?: string; email?: string };
+  visitor?: { id: string; name?: string; email?: string };
   initialContext?: {
     kind: string;
     title: string;
@@ -18,6 +21,7 @@ interface CreateConversationBody {
     url?: string;
     data?: Record<string, unknown>;
     snapshot?: { label: string; value: string }[];
+    pageSnapshot?: PageSnapshot;
   };
   /** First message the visitor typed, if any. */
   firstMessage?: string;
@@ -31,9 +35,35 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
     { preHandler: requirePublicKey },
     async (request, reply) => {
       const app = request.app!;
+      if (!app.widgetChatEnabled) {
+        return reply.code(403).send({ error: "Widget chat is not enabled for this app." });
+      }
       const { visitor, initialContext, firstMessage } =
         request.body ?? ({} as Partial<CreateConversationBody>);
-      if (!visitor?.id) {
+
+      // A verified identity token, if present, always wins over whatever
+      // the client claims in `visitor` — that's the whole point of
+      // verification. Falls back to the legacy client-supplied visitor for
+      // anonymous/unauthenticated flows (e.g. a public landing page).
+      const identity = resolveIdentity(request);
+      let verifiedUserId: string | null = null;
+      let responderGroupId: string | null = null;
+      let visitorId: string;
+      let visitorName: string | undefined;
+      let visitorEmail: string | undefined;
+
+      if (identity) {
+        const resolved = await resolveVerifiedUser(app.id, identity);
+        verifiedUserId = resolved.user.id;
+        responderGroupId = resolved.responderGroupId;
+        visitorId = identity.userId;
+        visitorName = identity.name;
+        visitorEmail = identity.email;
+      } else if (visitor?.id) {
+        visitorId = visitor.id;
+        visitorName = visitor.name;
+        visitorEmail = visitor.email;
+      } else {
         return reply.code(400).send({ error: "visitor.id is required" });
       }
 
@@ -51,6 +81,7 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
             snapshot: initialContext.snapshot
               ? JSON.stringify(initialContext.snapshot)
               : null,
+            pageSnapshot: serializePageSnapshot(initialContext.pageSnapshot, request.log) ?? null,
           },
         });
         contextId = context.id;
@@ -60,11 +91,15 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
       const conversation = await prisma.conversation.create({
         data: {
           appId: app.id,
-          visitorId: visitor.id,
-          visitorName: visitor.name,
-          visitorEmail: visitor.email,
+          kind: "support",
+          visitorId,
+          visitorName,
+          visitorEmail,
           initialContextId: contextId,
+          verifiedUserId,
+          responderGroupId,
         },
+        include: { verifiedUser: true },
       });
 
       const messages = [];
@@ -73,7 +108,7 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
           data: {
             conversationId: conversation.id,
             authorType: "visitor",
-            authorId: visitor.id,
+            authorId: visitorId,
             type: "context_card",
             contextId,
           },
@@ -85,7 +120,7 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
           data: {
             conversationId: conversation.id,
             authorType: "visitor",
-            authorId: visitor.id,
+            authorId: visitorId,
             type: "text",
             body: firstMessage,
           },
@@ -101,7 +136,12 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
         secretKey: app.secretKey,
         appId: app.id,
         type: "conversation.created",
-        data: { conversation: conversationDTO, context: contextDTO },
+        data: {
+          conversation: conversationDTO,
+          // pageSnapshot is a large, dashboard-only render payload — don't
+          // forward it to third-party webhook receivers.
+          context: contextDTO ? { ...contextDTO, pageSnapshot: undefined } : undefined,
+        },
       });
 
       return reply.code(201).send({
@@ -112,28 +152,40 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
     },
   );
 
-  // Dashboard: list conversations for the inbox, newest first.
-  fastify.get<{ Querystring: { status?: string } }>(
+  // Dashboard: list conversations for the support inbox, newest first.
+  // Optionally scoped to one responder group's queue. Explicitly
+  // kind:"support" so team DMs/groups (see routes/team.ts) never leak into
+  // the support inbox — they have their own list endpoint.
+  fastify.get<{ Querystring: { status?: string; responderGroupId?: string } }>(
     "/api/conversations",
     { preHandler: requireSecretKey },
     async (request, reply) => {
-      const { status } = request.query;
+      const { status, responderGroupId } = request.query;
       const conversations = await prisma.conversation.findMany({
-        where: { appId: request.app!.id, ...(status ? { status } : {}) },
+        where: {
+          appId: request.app!.id,
+          kind: "support",
+          ...(status ? { status } : {}),
+          ...(responderGroupId ? { responderGroupId } : {}),
+        },
         orderBy: { updatedAt: "desc" },
+        include: { verifiedUser: true },
       });
       return reply.send(conversations.map(toConversationDTO));
     },
   );
 
   // Either side: fetch a conversation's full thread (messages + resolved
-  // context payloads for any context_card messages).
+  // context payloads for any context_card messages). Shared by both
+  // kind:"support" and kind:"team" — `participants` is only populated for
+  // the latter (see toConversationDTO).
   fastify.get<{ Params: { id: string } }>(
     "/api/conversations/:id",
     { preHandler: requireAnyKey },
     async (request, reply) => {
       const conversation = await prisma.conversation.findFirst({
         where: { id: request.params.id, appId: request.app!.id },
+        include: { verifiedUser: true, participants: { include: { user: true } } },
       });
       if (!conversation) {
         return reply.code(404).send({ error: "Conversation not found" });
@@ -168,8 +220,11 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
     { preHandler: requireAnyKey },
     async (request, reply) => {
       const app = request.app!;
+      // kind:"support" only — team conversations have their own message
+      // endpoint (POST /api/team/conversations/:id/messages) with
+      // participant-based authorization instead of visitor/agent.
       const conversation = await prisma.conversation.findFirst({
-        where: { id: request.params.id, appId: app.id },
+        where: { id: request.params.id, appId: app.id, kind: "support" },
       });
       if (!conversation) {
         return reply.code(404).send({ error: "Conversation not found" });
@@ -180,11 +235,26 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
       }
 
       const isAgent = request.isAgentContext === true;
+      // If the caller (dashboard) presents a verified admin identity token,
+      // attribute the message to that real PlatformUser instead of the
+      // freeform agentId string — same resolveVerifiedUser() upsert path
+      // visitor identity already uses, just scoped to whoever's replying.
+      // No identity token still works exactly as before: falls back to the
+      // freeform agentId.
+      let agentAuthorId = agentId ?? "agent";
+      if (isAgent) {
+        const identity = resolveIdentity(request);
+        if (identity) {
+          const resolved = await resolveVerifiedUser(app.id, identity);
+          agentAuthorId = resolved.user.id;
+        }
+      }
       const message = await prisma.message.create({
         data: {
           conversationId: conversation.id,
           authorType: isAgent ? "agent" : "visitor",
-          authorId: isAgent ? agentId ?? "agent" : conversation.visitorId,
+          // Non-null: guaranteed set for kind:"support" (filtered above).
+          authorId: isAgent ? agentAuthorId : conversation.visitorId!,
           type: "text",
           body,
         },
@@ -234,6 +304,7 @@ export async function conversationsRoutes(fastify: FastifyInstance) {
           ...(status !== undefined ? { status } : {}),
           ...(assignedAgentId !== undefined ? { assignedAgentId } : {}),
         },
+        include: { verifiedUser: true },
       });
       const dto = toConversationDTO(conversation);
       emitConversationUpdate(app.id, dto);

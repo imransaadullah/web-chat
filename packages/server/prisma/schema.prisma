@@ -12,32 +12,155 @@ datasource db {
 }
 
 model App {
+  id                 String           @id @default(cuid())
+  name               String
+  publicKey          String           @unique
+  secretKey          String           @unique
+  // Set only for Apps provisioned via the trustmail master-key path (see
+  // auth.ts's resolveMasterKeyApp) — null for standalone/self-hosted Apps
+  // created through POST /api/apps. No FK to trustmail's own orgs table,
+  // per TRUSTMAIL_SERVICE_GUIDE.md §4: services shouldn't depend on each
+  // other's schemas, just the shared org id.
+  orgId              String?          @unique
+  webhookUrl         String?
+  preChatFields      String? // JSON-encoded PreChatField[] — asked of unauthenticated visitors before their first message
+  // Deployment-mode toggles: a tenant may only want a subset of what this
+  // product can do (e.g. ticketing only, no live widget). Default true so
+  // existing Apps keep every feature they already had.
+  ticketingEnabled   Boolean          @default(true)
+  widgetChatEnabled  Boolean          @default(true)
+  teamChatEnabled    Boolean          @default(true)
+  conversations   Conversation[]
+  contexts        Context[]
+  users           PlatformUser[]
+  responderGroups ResponderGroup[]
+  routingRules    RoutingRule[]
+  shareTokens     ShareToken[]
+  createdAt       DateTime         @default(now())
+}
+
+// A tenant's own end user, established via a signed identity-verification
+// token (see server/src/identity.ts) rather than a client-supplied id —
+// this is what lets a verified user's messages be routed and lets the same
+// user be recognized across conversations/devices. Upserted lazily the
+// first time a valid token for them shows up; there's no bulk directory
+// sync/import.
+model PlatformUser {
   id            String         @id @default(cuid())
-  name          String
-  publicKey     String         @unique
-  secretKey     String         @unique
-  webhookUrl    String?
+  appId         String
+  app           App            @relation(fields: [appId], references: [id])
+  externalId    String // the tenant's own id for this user
+  name          String?
+  email         String?
+  role          String? // tenant-defined segment, e.g. "provider" — drives routing
+  verifiedAt    DateTime       @default(now())
   createdAt     DateTime       @default(now())
+  updatedAt     DateTime       @updatedAt
   conversations Conversation[]
-  contexts      Context[]
+  memberships   ConversationParticipant[]
+
+  @@unique([appId, externalId])
+  @@index([appId, role])
+}
+
+// A named queue on the admin/agent side, e.g. "Provider support".
+model ResponderGroup {
+  id            String        @id @default(cuid())
+  appId         String
+  app           App           @relation(fields: [appId], references: [id])
+  key           String // stable slug used by routing rules and API callers
+  name          String
+  createdAt     DateTime      @default(now())
+  routingRules  RoutingRule[]
+  conversations Conversation[]
+
+  @@unique([appId, key])
+}
+
+// "Verified users with role X go to responder group Y." Highest priority match wins.
+model RoutingRule {
+  id               String         @id @default(cuid())
+  appId            String
+  app              App            @relation(fields: [appId], references: [id])
+  matchRole        String // matches PlatformUser.role
+  responderGroupId String
+  responderGroup   ResponderGroup @relation(fields: [responderGroupId], references: [id])
+  priority         Int            @default(0)
+  createdAt        DateTime       @default(now())
+
+  @@index([appId, matchRole])
 }
 
 model Conversation {
-  id                String    @id @default(cuid())
+  id                String          @id @default(cuid())
   appId             String
-  app               App       @relation(fields: [appId], references: [id])
-  status            String    @default("open") // open | pending | ticket | closed
-  visitorId         String
+  app               App             @relation(fields: [appId], references: [id])
+  // "support": the original visitor<->admin shape (unchanged, all fields
+  // below still apply exactly as before). "team": staff-to-staff DMs/group
+  // chat — visitor* fields are unused; participants live in
+  // ConversationParticipant instead. One table for both because Message
+  // already FKs to Conversation generically; splitting into two tables
+  // would mean either duplicating Message or a polymorphic relation
+  // Prisma doesn't support cleanly.
+  kind              String          @default("support")
+  status            String          @default("open") // open | pending | ticket | closed
+  visitorId         String? // required in practice for kind:"support", unused for kind:"team"
   visitorName       String?
   visitorEmail      String?
   initialContextId  String?
   assignedAgentId   String?
-  createdAt         DateTime  @default(now())
-  updatedAt         DateTime  @updatedAt
+  verifiedUserId    String? // set when the visitor came in via a verified identity token
+  verifiedUser      PlatformUser?   @relation(fields: [verifiedUserId], references: [id])
+  responderGroupId  String? // set from a RoutingRule match at creation time
+  responderGroup    ResponderGroup? @relation(fields: [responderGroupId], references: [id])
+  title             String? // kind:"team" only — optional group name; DMs derive a display name from participants
+  participants      ConversationParticipant[]
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
   messages          Message[]
   ticket            Ticket?
+  shareTokens       ShareToken[]
 
   @@index([appId, status])
+  @@index([appId, responderGroupId])
+  @@index([appId, kind])
+}
+
+// Membership in a kind:"team" Conversation (DM or group). Not used for
+// kind:"support" conversations — those track their one visitor via
+// Conversation.visitorId/verifiedUserId directly, unchanged.
+model ConversationParticipant {
+  id             String       @id @default(cuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  userId         String
+  user           PlatformUser @relation(fields: [userId], references: [id])
+  joinedAt       DateTime     @default(now())
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+}
+
+// A short-lived, single-use, conversation-scoped credential minted from
+// within the dashboard's "Share a page" action and consumed by the
+// bookmarklet running on whatever page an admin wants to share — see
+// server/src/routes/shareTokens.ts for why this is a random opaque token
+// (not a signed stateless one): single-use enforcement needs a DB row to
+// check against regardless, so a signature buys nothing extra here.
+model ShareToken {
+  id             String       @id @default(cuid())
+  appId          String
+  app            App          @relation(fields: [appId], references: [id])
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id])
+  token          String       @unique
+  issuedByUserId String? // PlatformUser.id, when the issuing admin has a verified identity
+  issuedByLabel  String? // freeform fallback label when the admin has no verified identity
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime     @default(now())
+
+  @@index([appId, conversationId])
 }
 
 model Context {
@@ -50,6 +173,7 @@ model Context {
   url        String?
   data       String? // JSON-encoded
   snapshot   String? // JSON-encoded ContextSnapshotField[]
+  pageSnapshot String? // JSON-encoded PageSnapshot (structural DOM capture, not HTML)
   capturedAt DateTime @default(now())
 
   @@index([appId])
@@ -61,9 +185,15 @@ model Message {
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   authorType     String // visitor | agent | system
   authorId       String
-  type           String // text | context_card | system
+  type           String // text | context_card | system | file
   body           String?
   contextId      String?
+  // Set only when type:"file" — object key/URL resolved through
+  // server/src/storage.ts (S3-compatible in production, local disk in dev).
+  attachmentUrl  String?
+  attachmentName String?
+  attachmentType String? // MIME type
+  attachmentSize Int? // bytes
   createdAt      DateTime     @default(now())
 
   @@index([conversationId])
@@ -74,7 +204,10 @@ model Ticket {
   conversationId String       @unique
   conversation   Conversation @relation(fields: [conversationId], references: [id])
   title          String
+  status         String       @default("open") // open | pending | resolved | closed
+  priority       String       @default("normal") // low | normal | high | urgent
   externalRef    String?
   externalUrl    String?
   createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
 }

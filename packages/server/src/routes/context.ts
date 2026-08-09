@@ -1,10 +1,11 @@
 import type { FastifyInstance } from "fastify";
-import type { ContextSnapshotField } from "@web-chat/shared";
+import type { ContextSnapshotField, PageSnapshot } from "@web-chat/shared";
 import { prisma } from "../db.js";
 import { requirePublicKey } from "../auth.js";
 import { toContextDTO, toMessageDTO } from "../mappers.js";
 import { emitMessage } from "../realtime.js";
 import { dispatchWebhook } from "../webhooks.js";
+import { serializePageSnapshot } from "../pageSnapshot.js";
 
 interface ShareContextBody {
   kind: string;
@@ -13,6 +14,7 @@ interface ShareContextBody {
   url?: string;
   data?: Record<string, unknown>;
   snapshot?: ContextSnapshotField[];
+  pageSnapshot?: PageSnapshot;
   /**
    * If true, also drop a context_card message into the conversation
    * immediately (the "share this view" button). If false/omitted, the
@@ -29,13 +31,13 @@ export async function contextRoutes(fastify: FastifyInstance) {
     async (request, reply) => {
       const app = request.app!;
       const conversation = await prisma.conversation.findFirst({
-        where: { id: request.params.id, appId: app.id },
+        where: { id: request.params.id, appId: app.id, kind: "support" },
       });
       if (!conversation) {
         return reply.code(404).send({ error: "Conversation not found" });
       }
 
-      const { kind, title, summary, url, data, snapshot, postAsMessage } =
+      const { kind, title, summary, url, data, snapshot, pageSnapshot, postAsMessage } =
         request.body;
       if (!kind || !title) {
         return reply.code(400).send({ error: "kind and title are required" });
@@ -50,6 +52,7 @@ export async function contextRoutes(fastify: FastifyInstance) {
           url,
           data: data ? JSON.stringify(data) : null,
           snapshot: snapshot ? JSON.stringify(snapshot) : null,
+          pageSnapshot: serializePageSnapshot(pageSnapshot, request.log) ?? null,
         },
       });
       const contextDTO = toContextDTO(context);
@@ -60,7 +63,11 @@ export async function contextRoutes(fastify: FastifyInstance) {
           data: {
             conversationId: conversation.id,
             authorType: "visitor",
-            authorId: conversation.visitorId,
+            // Non-null: this route only ever operates on kind:"support"
+            // conversations (context-sharing is a support-flow concept),
+            // and visitorId is always set at creation for that kind —
+            // only kind:"team" conversations leave it null.
+            authorId: conversation.visitorId!,
             type: "context_card",
             contextId: context.id,
           },
@@ -77,7 +84,9 @@ export async function contextRoutes(fastify: FastifyInstance) {
         appId: app.id,
         type: "context.shared",
         data: {
-          context: contextDTO,
+          // pageSnapshot is a large, dashboard-only render payload — don't
+          // forward it to third-party webhook receivers.
+          context: { ...contextDTO, pageSnapshot: undefined },
           conversation: {
             id: conversation.id,
             visitorId: conversation.visitorId,

@@ -1,24 +1,52 @@
 {
-  "name": "@web-chat/dashboard",
+  "name": "@imransaadullah/web-chat-dashboard",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
+  "main": "./dist-lib/lib.cjs",
+  "module": "./dist-lib/lib.js",
+  "types": "./dist-lib/lib.d.ts",
+  "files": [
+    "dist-lib"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/imransaadullah/web-chat.git",
+    "directory": "packages/dashboard"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist-lib/lib.d.ts",
+      "import": "./dist-lib/lib.js",
+      "require": "./dist-lib/lib.cjs"
+    },
+    "./style.css": "./dist-lib/lib.css"
+  },
   "scripts": {
     "dev": "vite --port 5174",
     "build": "tsc -p tsconfig.json --noEmit && vite build",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "build:lib": "tsup",
+    "dev:lib": "tsup --watch"
   },
   "dependencies": {
-    "@web-chat/shared": "*",
-    "react": "^18.3.1",
-    "react-dom": "^18.3.1",
     "socket.io-client": "^4.8.0"
+  },
+  "peerDependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
   },
   "devDependencies": {
     "@types/react": "^18.3.11",
     "@types/react-dom": "^18.3.0",
     "@vitejs/plugin-react": "^4.3.2",
+    "@web-chat/shared": "*",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "tsup": "^8.5.1",
     "typescript": "^5.6.3",
     "vite": "^5.4.8"
   }

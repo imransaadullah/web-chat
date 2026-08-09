@@ -17,6 +17,13 @@ export function initRealtime(httpServer: HttpServer): SocketIOServer {
     socket.on("join:app", (appId: string) => {
       socket.join(`app:${appId}`);
     });
+    // A dashboard session with a resolved admin identity joins its own
+    // personal room, so a brand-new DM/group can be pushed to just that
+    // specific participant — unlike join:app, this is never a broadcast to
+    // "everyone with this app's secretKey."
+    socket.on("join:user", (platformUserId: string) => {
+      socket.join(`user:${platformUserId}`);
+    });
   });
 
   return io;
@@ -42,4 +49,12 @@ export function emitConversationUpdate(appId: string, conversation: unknown) {
   getIO()
     .to(`app:${appId}`)
     .emit("conversation:update", conversation);
+}
+
+/** Notify each participant's personal room that a new team DM/group exists. */
+export function emitTeamConversationCreated(participantUserIds: string[], conversation: unknown) {
+  const io = getIO();
+  for (const userId of participantUserIds) {
+    io.to(`user:${userId}`).emit("team-conversation:new", conversation);
+  }
 }

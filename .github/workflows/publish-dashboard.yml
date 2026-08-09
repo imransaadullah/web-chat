@@ -1,0 +1,55 @@
+name: Publish dashboard package
+
+# Runs on every push to main that touches the dashboard or the shared
+# package it bundles (see tsup.config.ts's noExternal) — no manual tag or
+# version bump needed, trustmail always has a fresh build to install.
+#
+# Versioning: package.json's "version" only supplies the major.minor;
+# the patch is this run's number (monotonically increasing, unique per
+# publish). Set only in the CI checkout via `npm version`, never committed
+# back — bump major.minor by hand in package.json for an intentional
+# breaking/feature release, everything else is automatic.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "packages/dashboard/**"
+      - "packages/shared/**"
+      - ".github/workflows/publish-dashboard.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-dashboard
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          # Also writes ~/.npmrc pointing @imransaadullah/* at GitHub
+          # Packages, authenticated via NODE_AUTH_TOKEN below.
+          registry-url: https://npm.pkg.github.com
+          scope: "@imransaadullah"
+
+      - run: npm ci
+      - run: npm run typecheck -w packages/shared -w packages/dashboard
+      - run: npm run build -w packages/shared
+      - run: npm run build:lib -w packages/dashboard
+
+      - name: Stamp a unique version for this run
+        working-directory: packages/dashboard
+        run: |
+          BASE=$(node -p "require('./package.json').version.split('.').slice(0,2).join('.')")
+          npm version "$BASE.${{ github.run_number }}" --no-git-tag-version --allow-same-version
+
+      - run: npm publish -w packages/dashboard
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
