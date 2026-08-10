@@ -76,6 +76,15 @@ jobs:
             # devDependency) at deploy time for `prisma migrate deploy`
             # below — omitting dev deps would silently break migrations.
             npm ci
+            # systemd gets DATABASE_URL etc. via EnvironmentFile=.env (see
+            # systemd/web-chat.service), but this SSH shell doesn't — an
+            # ad-hoc `prisma migrate deploy` here otherwise fails with
+            # "Environment variable not found: DATABASE_URL". `set -a`
+            # exports every var sourced from .env; `set +a` scopes that
+            # back down to just this block.
+            set -a
+            source .env
+            set +a
             cd packages/server
             npx prisma migrate deploy
             cd ${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }}
