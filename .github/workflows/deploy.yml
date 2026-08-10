@@ -7,7 +7,10 @@ name: Deploy
 # WorkingDirectory/EnvironmentFile paths must be substituted to match
 # VPS_DEPLOY_DIR below, since a systemd unit can't read a CI variable).
 # Nothing in this workflow runs until VPS_HOST/VPS_USER/VPS_SSH_KEY are set
-# as repo secrets — until then it's inert.
+# as repo secrets — until then it's inert. DATABASE_URL is also required
+# (used directly for `prisma migrate deploy`, see below — must match
+# whatever's in the VPS's own .env, since that's what the systemd-run
+# server itself connects with).
 
 on:
   push:
@@ -76,17 +79,15 @@ jobs:
             # devDependency) at deploy time for `prisma migrate deploy`
             # below — omitting dev deps would silently break migrations.
             npm ci
-            # systemd gets DATABASE_URL etc. via EnvironmentFile=.env (see
+            # systemd gets DATABASE_URL via EnvironmentFile=.env (see
             # systemd/web-chat.service), but this SSH shell doesn't — an
             # ad-hoc `prisma migrate deploy` here otherwise fails with
-            # "Environment variable not found: DATABASE_URL". `set -a`
-            # exports every var sourced from .env; `set +a` scopes that
-            # back down to just this block.
-            set -a
-            source .env
-            set +a
+            # "Environment variable not found: DATABASE_URL". Setting it
+            # from the repo secret directly (rather than sourcing the
+            # remote .env) means this step doesn't depend on .env already
+            # existing on the VPS by the time this pipeline first runs.
             cd packages/server
-            npx prisma migrate deploy
+            DATABASE_URL="${{ secrets.DATABASE_URL }}" npx prisma migrate deploy
             cd ${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }}
             echo "${{ github.sha }}" > .deploy_hash
             systemctl restart web-chat
