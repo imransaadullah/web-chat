@@ -1,16 +1,21 @@
 name: Deploy
 
-# Autonomous CD, per TRUSTMAIL_SERVICE_GUIDE.md §2.1: this pipeline ships
-# straight to the VPS on every push to main. TrustMail's own repo/installer
-# never clones, builds, or restarts this service — it only generated our
-# .env once and enabled systemd/web-chat.service (see that file — its
-# WorkingDirectory/EnvironmentFile paths must be substituted to match
-# VPS_DEPLOY_DIR below, since a systemd unit can't read a CI variable).
+# Ships the built tree to the VPS on every push to main — that's as far as
+# CI goes. Installing dependencies, running migrations, and restarting the
+# service is deliberately NOT automated here: `systemctl restart` needs
+# root, and there's no way to hand a non-interactive SSH session from
+# GitHub Actions a sudo password. That half of the deploy is
+# scripts/deploy.sh, run manually on the VPS after this workflow finishes
+# (see that file for why it's split this way).
+#
+# TrustMail's own repo/installer never clones, builds, or restarts this
+# service either — it only generated our .env once and enabled
+# systemd/web-chat.service (see that file — its WorkingDirectory/
+# EnvironmentFile paths must be substituted to match VPS_DEPLOY_DIR below,
+# since a systemd unit can't read a CI variable).
+#
 # Nothing in this workflow runs until VPS_HOST/VPS_USER/VPS_SSH_KEY are set
-# as repo secrets — until then it's inert. DATABASE_URL is also required
-# (used directly for `prisma migrate deploy`, see below — must match
-# whatever's in the VPS's own .env, since that's what the systemd-run
-# server itself connects with).
+# as repo secrets — until then it's inert.
 
 on:
   push:
@@ -60,34 +65,14 @@ jobs:
             --exclude='packages/server/prisma/dev.db*' \
             -e "ssh -o StrictHostKeyChecking=accept-new" \
             ./ "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}:${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }}"
+          # Just a file write under a dir the deploy user already owns (rsync
+          # above already proved that) — no sudo needed, unlike the actual
+          # install/migrate/restart below.
+          ssh -o StrictHostKeyChecking=accept-new "${{ secrets.VPS_USER }}@${{ secrets.VPS_HOST }}" \
+            "echo '${{ github.sha }}' > ${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }}/.deploy_hash"
 
-      - name: Install, migrate, restart
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.VPS_HOST }}
-          username: ${{ secrets.VPS_USER }}
-          key: ${{ secrets.VPS_SSH_KEY }}
-          # appleboy/ssh-action templates `script:` with the workflow's own
-          # expression context before sending it over SSH, so
-          # ${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }} resolves here
-          # same as in the rsync step above — it's not read from the
-          # remote shell's environment.
-          script: |
-            set -e
-            cd ${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }}
-            # Not --omit=dev: packages/server needs the `prisma` CLI (a
-            # devDependency) at deploy time for `prisma migrate deploy`
-            # below — omitting dev deps would silently break migrations.
-            npm ci
-            # systemd gets DATABASE_URL via EnvironmentFile=.env (see
-            # systemd/web-chat.service), but this SSH shell doesn't — an
-            # ad-hoc `prisma migrate deploy` here otherwise fails with
-            # "Environment variable not found: DATABASE_URL". Setting it
-            # from the repo secret directly (rather than sourcing the
-            # remote .env) means this step doesn't depend on .env already
-            # existing on the VPS by the time this pipeline first runs.
-            cd packages/server
-            DATABASE_URL="${{ secrets.DATABASE_URL }}" npx prisma migrate deploy
-            cd ${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }}
-            echo "${{ github.sha }}" > .deploy_hash
-            systemctl restart web-chat
+      - name: Print next (manual) step
+        run: |
+          echo "Code shipped to the VPS. Now SSH in and run:"
+          echo "  ./scripts/deploy.sh ${{ secrets.VPS_DEPLOY_DIR || '/opt/web-chat' }}"
+          echo "(installs deps, runs migrations, restarts the service — needs sudo, see that script for why it's not automated here)"
