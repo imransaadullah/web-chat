@@ -30,6 +30,12 @@ model App {
   ticketingEnabled   Boolean          @default(true)
   widgetChatEnabled  Boolean          @default(true)
   teamChatEnabled    Boolean          @default(true)
+  // Entitlement flag synced from trustmail (PATCH /api/apps/entitlement,
+  // master-key only) when an org's trial ends or its webchat subscription
+  // lapses/renews. Checked on every auth path — public key (widget), secret
+  // key (dashboard), and the master-key path itself — since the widget talks
+  // to this service directly and never goes through trustmail's own gate.
+  suspended          Boolean          @default(false)
   conversations   Conversation[]
   contexts        Context[]
   users           PlatformUser[]

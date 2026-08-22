@@ -14,14 +14,27 @@ declare module "fastify" {
   }
 }
 
-const MASTER_KEY_HEADER = "x-webchat-master";
+export const MASTER_KEY_HEADER = "x-webchat-master";
 const ORG_HEADER = "x-trustmail-org";
 
-function constantTimeEquals(a: string, b: string): boolean {
+export function constantTimeEquals(a: string, b: string): boolean {
   if (a.length !== b.length) return false;
   let mismatch = 0;
   for (let i = 0; i < a.length; i++) mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   return mismatch === 0;
+}
+
+/**
+ * Rejects a suspended App (trial ended / subscription lapsed, synced from
+ * trustmail via PATCH /api/apps/entitlement) with a 402 — distinct from the
+ * 401s above, since the credential itself is valid, it's just not currently
+ * entitled to use the service. Returns true when the request was rejected
+ * (caller should stop), false when it's fine to proceed.
+ */
+function rejectIfSuspended(app: App, reply: FastifyReply): boolean {
+  if (!app.suspended) return false;
+  reply.code(402).send({ error: 'This workspace\'s webchat subscription is not active.', code: 'webchat_suspended' });
+  return true;
 }
 
 /**
@@ -57,7 +70,10 @@ async function resolveMasterKeyApp(request: FastifyRequest, reply: FastifyReply)
   }
 
   const existing = await prisma.app.findUnique({ where: { orgId } });
-  if (existing) return existing;
+  if (existing) {
+    if (rejectIfSuspended(existing, reply)) return null;
+    return existing;
+  }
 
   // publicKey/secretKey are still generated even here — the embeddable
   // widget snippet on the org's own site needs *some* public key to
@@ -89,6 +105,7 @@ export async function requirePublicKey(
   if (!app) {
     return reply.code(401).send({ error: "Invalid app key" });
   }
+  if (rejectIfSuspended(app, reply)) return;
   request.app = app;
   request.isAgentContext = false;
 }
@@ -122,6 +139,7 @@ export async function requireSecretKey(
   if (!app) {
     return reply.code(401).send({ error: "Invalid app secret" });
   }
+  if (rejectIfSuspended(app, reply)) return;
   request.app = app;
   request.isAgentContext = true;
 }
@@ -153,6 +171,7 @@ export async function requireAnyKey(
   if (typeof secret === "string") {
     const app = await prisma.app.findUnique({ where: { secretKey: secret } });
     if (app) {
+      if (rejectIfSuspended(app, reply)) return;
       request.app = app;
       request.isAgentContext = true;
       return;
@@ -162,6 +181,7 @@ export async function requireAnyKey(
   if (typeof pub === "string") {
     const app = await prisma.app.findUnique({ where: { publicKey: pub } });
     if (app) {
+      if (rejectIfSuspended(app, reply)) return;
       request.app = app;
       request.isAgentContext = false;
       return;
